@@ -344,12 +344,43 @@ class PPO(PolicyAlgo, ValueAlgo):
         # 更新扩散模型的训练数据集
         dataset = d4rl.qlearning_dataset(gym.make('hopper-medium-v2'))
         inputs = torch.from_numpy(make_inputs(gym.make('hopper-medium-v2'))).float()
-        self.diffusion_trainer.dataset = torch.utils.data.TensorDataset(inputs)
+
+        # 定义反应项参数
+        k1 = 0.1  # 吸引力系数
+        k2 = 0.05  # 排斥力系数
+        sigma = 1.0  # 核带宽
+
+        # 获取样本数量
+        N = inputs.size(0)
+
+        # 计算两两样本之间的差值
+        diff = inputs.unsqueeze(1) - inputs.unsqueeze(0)  # (N, N, D)
+
+        # 计算高斯核
+        distances_squared = (diff ** 2).sum(dim=2)  # (N, N)
+        kernel = torch.exp(-distances_squared / (2 * sigma ** 2))  # (N, N)
+
+        # 计算密度梯度 ∇u(x_i)
+        grad_u = (diff * kernel.unsqueeze(2)).sum(dim=1) / (sigma ** 2 * N)  # (N, D)
+
+        # 计算密度 u(x_i)
+        u = kernel.sum(dim=1) / N  # (N, )
+
+        # 反应项
+        R1 = k1 * grad_u  # 吸引项
+        R2 = k2 * u.unsqueeze(1) * u.unsqueeze(1)  # 排斥项（u^2）
+
+        # 调整输入以包含反应项的影响（概念实现）
+        # 在训练数据中加入吸引和排斥项的综合影响
+        adjusted_inputs = inputs + R1 - R2
+
+        # 更新扩散模型的训练数据集
+        self.diffusion_trainer.dataset = torch.utils.data.TensorDataset(adjusted_inputs)
 
         # 训练扩散模型
         self.diffusion_trainer.train()
 
-        # 更新SimpleDiffusionGenerator
+        # 更新生成器中的扩散模型
         self.synth_er_generator.diffusion = self.diffusion_trainer.ema.ema_model
 
 class ActorNetwork(nn.Module):
